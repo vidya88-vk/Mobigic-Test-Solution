@@ -1,0 +1,139 @@
+//	Enter the answer in any programming language you desire
+
+// To Run The Project Follow Below Steps:-
+// 1. Install node.js
+// 2.Create a project directory.
+// 3.Initialize node js project using npm init command.(Create package.json file)
+// 4.Install Dependencies npm install express mongoose multer bcrypt
+// 5.Create an upload directory:- mkdir uploads.
+// 6.create server.js file & Run file node server.js
+
+
+// server.js
+
+const express = require('express');
+const mongoose = require('mongoose');
+const multer = require('multer');
+const bcrypt = require('bcrypt');
+const path = require('path');
+const fs = require('fs');
+
+const app = express();
+const port = 3000;
+
+// MongoDB setup
+mongoose.connect('mongodb://localhost:27017/file_upload', { useNewUrlParser: true, useUnifiedTopology: true });
+const db = mongoose.connection;
+db.on('error', console.error.bind(console, 'MongoDB connection error:'));
+
+// User schema
+const userSchema = new mongoose.Schema({
+    username: String,
+    password: String,
+    files: [{
+        fileName: String,
+        fileCode: String
+    }]
+});
+const User = mongoose.model('User', userSchema);
+
+// Multer setup for file upload
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, './uploads');
+    },
+    filename: (req, file, cb) => {
+        cb(null, file.fieldname + '-' + Date.now() + path.extname(file.originalname));
+    }
+});
+const upload = multer({ storage: storage });
+
+// Middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Register endpoint
+app.post('/register', async (req, res) => {
+    const { username, password } = req.body;
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = new User({ username, password: hashedPassword });
+    user.save(err => {
+        if (err) {
+            res.status(500).send('Error registering user');
+        } else {
+            res.status(200).send('User registered successfully');
+        }
+    });
+});
+
+// Login endpoint
+app.post('/login', async (req, res) => {
+    const { username, password } = req.body;
+    const user = await User.findOne({ username });
+    if (!user) {
+        return res.status(404).send('User not found');
+    }
+    const passwordMatch = await bcrypt.compare(password, user.password);
+    if (!passwordMatch) {
+        return res.status(401).send('Invalid credentials');
+    }
+    res.status(200).send('Login successful');
+});
+
+// Upload file endpoint
+app.post('/upload', upload.single('file'), async (req, res) => {
+    const { username } = req.body;
+    const user = await User.findOne({ username });
+    if (!user) {
+        return res.status(404).send('User not found');
+    }
+    const file = req.file;
+    const fileCode = Math.random().toString(36).substring(2, 8); // Generate 6-digit code
+    user.files.push({ fileName: file.filename, fileCode });
+    user.save();
+    res.status(200).json({ fileCode });
+});
+
+// Get files for a user
+app.get('/files/:username', async (req, res) => {
+    const { username } = req.params;
+    const user = await User.findOne({ username });
+    if (!user) {
+        return res.status(404).send('User not found');
+    }
+    res.status(200).json({ files: user.files });
+});
+
+// Delete file
+app.delete('/files/:username/:fileCode', async (req, res) => {
+    const { username, fileCode } = req.params;
+    const user = await User.findOne({ username });
+    if (!user) {
+        return res.status(404).send('User not found');
+    }
+    const fileIndex = user.files.findIndex(file => file.fileCode === fileCode);
+    if (fileIndex === -1) {
+        return res.status(404).send('File not found');
+    }
+    const fileName = user.files[fileIndex].fileName;
+    user.files.splice(fileIndex, 1);
+    user.save();
+    fs.unlinkSync('./uploads/' + fileName); // Delete file from file system
+    res.status(200).send('File deleted successfully');
+});
+
+// Download file
+app.get('/download/:fileCode', async (req, res) => {
+    const { fileCode } = req.params;
+    const user = await User.findOne({ 'files.fileCode': fileCode });
+    if (!user) {
+        return res.status(404).send('File not found');
+    }
+    const file = user.files.find(file => file.fileCode === fileCode);
+    const filePath = path.join(__dirname, 'uploads', file.fileName);
+    res.download(filePath);
+});
+
+app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+});
